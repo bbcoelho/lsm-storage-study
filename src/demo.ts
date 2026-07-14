@@ -212,23 +212,58 @@ async function lesson02(context: LessonContext): Promise<void> {
 	takeaway(["The durable log can rebuild the volatile hash index, but large logs make restart slower."]);
 }
 
-function lesson03(): void {
+async function lesson03(context: LessonContext): Promise<void> {
 	const directory = path.join(dataRoot, "03-sstable");
 	resetDirectory(directory);
-	const segment = SSTableSegment.create(directory, "segment-a", [
-		{ key: "handbag", value: "bag", kind: "put", seq: 1 },
-		{ key: "handsome", value: "nice", kind: "put", seq: 2 },
-		{ key: "handiwork", value: "craft", kind: "put", seq: 3 },
-		{ key: "hat", value: "cap", kind: "put", seq: 4 },
-		{ key: "zebra", value: "animal", kind: "put", seq: 5 },
-	], 2);
+	const inputRows = [
+		{ key: "handbag", value: "bag", kind: "put" as const, seq: 1 },
+		{ key: "handsome", value: "nice", kind: "put" as const, seq: 2 },
+		{ key: "handiwork", value: "craft", kind: "put" as const, seq: 3 },
+		{ key: "hat", value: "cap", kind: "put" as const, seq: 4 },
+		{ key: "zebra", value: "animal", kind: "put" as const, seq: 5 },
+	];
 
-	print("03 SSTable with sparse index", {
-		idea: "Rows are sorted, so the sparse index jumps near the key and then scans forward.",
-		segment: segment.snapshot(),
-		lookup: segment.lookup("handiwork"),
-		range: segment.range("handbag", "hat"),
-	});
+	heading("Lesson 03: SSTable with sparse index");
+	concept([
+		"An SSTable stores one sorted row per key.",
+		"A sparse index stores only the first key of each block.",
+		"A lookup jumps near the key, then scans a short sorted range.",
+	]);
+	table("Input rows before SSTable write", inputRows.map((entry) => ({
+		key: entry.key,
+		value: entry.value,
+		seq: entry.seq,
+	})));
+
+	operation("create SSTable with blockSize=2");
+	await prediction(context, "The input includes handiwork after handsome. What order should the SSTable store them in?");
+	const segment = SSTableSegment.create(directory, "segment-a", [
+		...inputRows,
+	], 2);
+	const snapshot = segment.snapshot();
+	table("Sorted SSTable rows", segmentRows(snapshot));
+	table("Sparse index", sparseIndexRows(snapshot));
+	takeaway(["The sparse index is smaller than the data: one index entry per block, not per key."]);
+
+	operation('lookup("handiwork")');
+	await prediction(context, "handiwork is not a sparse-index key. Which block should the lookup start scanning from?");
+	const lookup = segment.lookup("handiwork");
+	table("Lookup trace", [{
+		startKey: lookup.startKey ?? "-",
+		scannedKeys: lookup.scannedKeys.join(", "),
+		found: lookup.found,
+		value: lookup.entry?.value ?? "-",
+	}]);
+	takeaway(["Sorted keys let the read stop once it finds the target or passes where it could be."]);
+
+	operation('range("handbag", "hat")');
+	await prediction(context, "Why is a sorted file better than a hash map for this range query?");
+	table("Range scan result", segment.range("handbag", "hat").map((entry) => ({
+		key: entry.key,
+		value: formatValue(entry.value),
+		seq: entry.seq,
+	})));
+	takeaway(["Range queries become sequential scans over neighboring sorted keys."]);
 }
 
 function lesson04(): void {
