@@ -50,3 +50,34 @@ test("sstable uses sorted sparse lookup and bloom skip", (t) => {
 	]);
 	assert.equal(missing.skippedByBloom, true);
 });
+
+// Verifies that reads prefer the newest segment, which is essential when older segments contain stale values.
+test("lsm tree reads newest segment before older segments", (t) => {
+	const tree = new LSMTree(tempDirectory(t), 10, 2);
+
+	tree.put("alpha", "old");
+	tree.flush();
+	tree.put("alpha", "new");
+	tree.flush();
+
+	assert.equal(tree.get("alpha"), "new");
+});
+
+// Verifies that tombstones hide older values and full compaction removes deleted keys from surviving data.
+test("tombstones hide values and compaction drops deleted keys", (t) => {
+	const tree = new LSMTree(tempDirectory(t), 10, 2);
+
+	tree.put("alpha", "1");
+	tree.put("bravo", "2");
+	tree.flush();
+	tree.delete("bravo");
+	tree.put("charlie", "3");
+	tree.flush();
+
+	assert.equal(tree.get("bravo"), undefined);
+	tree.compactAll();
+
+	assert.equal(tree.get("alpha"), "1");
+	assert.equal(tree.get("bravo"), undefined);
+	assert.equal(tree.get("charlie"), "3");
+});
