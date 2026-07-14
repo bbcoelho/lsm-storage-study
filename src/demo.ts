@@ -297,25 +297,53 @@ async function lesson03(context: LessonContext): Promise<void> {
 	takeaway(["Range queries become sequential scans over neighboring sorted keys."]);
 }
 
-function lesson04(): void {
+async function lesson04(context: LessonContext): Promise<void> {
 	const directory = path.join(dataRoot, "04-memtable-flush");
 	resetDirectory(directory);
 	const tree = new LSMTree(directory, 10, 2);
 
+	heading("Lesson 04: Memtable, WAL, and flush");
+	concept([
+		"Writes first go to a write-ahead log so unflushed memory can be recovered.",
+		"The memtable keeps the newest values in memory and can be emitted sorted by key.",
+		"A flush turns the memtable into a new immutable SSTable segment.",
+	]);
+
+	operation('put("delta", "4"), put("alpha", "1"), put("charlie", "3"), put("bravo", "2")');
+	await prediction(context, "The writes arrive out of key order. Which structure should preserve write order, and which should flush sorted?");
 	tree.put("delta", "4");
 	tree.put("alpha", "1");
 	tree.put("charlie", "3");
 	tree.put("bravo", "2");
 
 	const beforeFlush = tree.snapshot();
-	tree.flush();
+	table("WAL before flush", walRows(beforeFlush));
+	table("Memtable before flush", memtableRows(beforeFlush));
+	takeaway([
+		"The WAL records the physical recovery sequence.",
+		"The memtable can be emitted in key order when it becomes an SSTable.",
+	]);
 
-	print("04 Memtable flush", {
-		idea: "Writes arrive in any order in memory, then flush as a sorted immutable SSTable.",
-		beforeFlush,
-		afterFlush: tree.snapshot(),
-		readTrace: tree.getWithTrace("charlie"),
-	});
+	operation("flush memtable to SSTable");
+	await prediction(context, "After flush, what should happen to the memtable and WAL?");
+	tree.flush();
+	const afterFlush = tree.snapshot() as { segments: object[] };
+	table("Memtable after flush", memtableRows(afterFlush));
+	table("WAL after flush", walRows(afterFlush));
+	table("Segments after flush", segmentSummaryRows(afterFlush));
+	const [newestSegment] = afterFlush.segments;
+	if (newestSegment) {
+		table("Newest segment rows", segmentRows(newestSegment));
+		table("Newest segment sparse index", sparseIndexRows(newestSegment));
+	}
+	takeaway(["Flushed data is now immutable on disk, so the WAL for those writes can be cleared."]);
+
+	operation('get("charlie")');
+	await prediction(context, "The memtable is empty. Where should the read look next?");
+	const readTrace = tree.getWithTrace("charlie");
+	table("Read trace", traceRows(readTrace));
+	console.log(`\nRead result: ${(readTrace as { value: string | null }).value}`);
+	takeaway(["Reads check memory first, then newest segment to oldest segment."]);
 }
 
 function lesson05(): void {
