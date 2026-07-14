@@ -40,6 +40,11 @@ async function prediction(context: LessonContext, question: string): Promise<voi
 }
 
 async function pause(context: LessonContext, prompt = "Press Enter to continue..."): Promise<void> {
+	if (!input.isTTY) {
+		console.log(`\n${prompt}`);
+		return;
+	}
+
 	await context.rl.question(`\n${prompt}`);
 }
 
@@ -474,6 +479,10 @@ async function chooseLesson(context: LessonContext): Promise<string> {
 		console.log(`${id}. ${title}`);
 	}
 	console.log("all. Run every lesson");
+	if (!input.isTTY) {
+		console.log("\nLesson [all]: all");
+		return "all";
+	}
 
 	const answer = await context.rl.question("\nLesson [all]: ");
 	return answer.trim() || "all";
