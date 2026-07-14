@@ -81,3 +81,33 @@ test("tombstones hide values and compaction drops deleted keys", (t) => {
 	assert.equal(tree.get("bravo"), undefined);
 	assert.equal(tree.get("charlie"), "3");
 });
+
+// Verifies that the write-ahead log can rebuild unflushed memtable contents after a simulated restart.
+test("wal recovers unflushed memtable writes", (t) => {
+	const directory = tempDirectory(t);
+	const first = new LSMTree(directory, 10, 2);
+
+	first.put("alpha", "1");
+	first.put("bravo", "2");
+
+	const recovered = new LSMTree(directory, 10, 2);
+	recovered.recoverMemtableFromWal();
+
+	assert.equal(recovered.get("alpha"), "1");
+	assert.equal(recovered.get("bravo"), "2");
+});
+
+// Verifies that immutable SSTable files are reopened after a simulated restart.
+test("flushed sstable segments survive restart", (t) => {
+	const directory = tempDirectory(t);
+	const first = new LSMTree(directory, 10, 2);
+
+	first.put("alpha", "1");
+	first.put("bravo", "2");
+	first.flush();
+
+	const restarted = new LSMTree(directory, 10, 2);
+
+	assert.equal(restarted.get("alpha"), "1");
+	assert.equal(restarted.get("bravo"), "2");
+});
