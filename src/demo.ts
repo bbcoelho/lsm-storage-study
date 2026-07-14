@@ -93,6 +93,37 @@ function traceRows(trace: object): TableRow[] {
 	}));
 }
 
+function memtableRows(snapshot: object): TableRow[] {
+	const tree = snapshot as { memtable: Array<{ key: string; value: string | null; kind: string; seq: number }> };
+	return tree.memtable.map((entry) => ({
+		key: entry.key,
+		value: formatValue(entry.value),
+		kind: entry.kind,
+		seq: entry.seq,
+	}));
+}
+
+function walRows(snapshot: object): TableRow[] {
+	const tree = snapshot as { wal: Array<{ offset: number; entry: { key: string; value: string | null; kind: string; seq: number } }> };
+	return tree.wal.map(({ offset, entry }) => ({
+		offset,
+		key: entry.key,
+		value: formatValue(entry.value),
+		kind: entry.kind,
+		seq: entry.seq,
+	}));
+}
+
+function segmentSummaryRows(snapshot: object): TableRow[] {
+	const tree = snapshot as { segments: Array<{ id: string; entries: Array<{ key: string; value: string | null; kind: string }> }> };
+	return tree.segments.map((segment, index) => ({
+		order: index === 0 ? "newest" : `older-${index}`,
+		id: segment.id,
+		rows: segment.entries.length,
+		keys: segment.entries.map((entry) => `${entry.key}:${entry.kind === "delete" ? "DEL" : entry.value}`).join(", "),
+	}));
+}
+
 function print(title: string, value: unknown): void {
 	console.log(`\n## ${title}`);
 	console.log(JSON.stringify(value, null, "\t"));
