@@ -394,29 +394,62 @@ async function lesson05(context: LessonContext): Promise<void> {
 	takeaway(["Each segment Bloom filter says omega is definitely absent, so no row scan is needed."]);
 }
 
-function lesson06(): void {
+async function lesson06(context: LessonContext): Promise<void> {
 	const directory = path.join(dataRoot, "06-compaction");
 	resetDirectory(directory);
 	const tree = new LSMTree(directory, 10, 2);
 
+	heading("Lesson 06: Compaction");
+	concept([
+		"LSM storage accumulates immutable segments over time.",
+		"Compaction merges segments, keeps the newest value per key, and removes overwritten rows.",
+		"A tombstone can be dropped once it has covered all older values for that key.",
+	]);
+
+	operation('write old segment: put("alpha", "old"), put("bravo", "2"), flush()');
+	await prediction(context, "This creates the older segment. Which keys should it contain?");
 	tree.put("alpha", "old");
 	tree.put("bravo", "2");
 	tree.flush();
+	table("Segments after first flush", segmentSummaryRows(tree.snapshot()));
+	takeaway(["The first segment is immutable and remains readable while newer segments arrive."]);
+
+	operation('write newer segment: put("alpha", "new"), delete("bravo"), put("charlie", "3"), flush()');
+	await prediction(context, "Which records should win during a future merge: old alpha/bravo, or the newer records?");
 	tree.put("alpha", "new");
 	tree.delete("bravo");
 	tree.put("charlie", "3");
 	tree.flush();
 
 	const beforeCompaction = tree.snapshot();
-	tree.compactAll();
+	table("Segments before compaction", segmentSummaryRows(beforeCompaction));
+	for (const [index, segment] of (beforeCompaction as { segments: object[] }).segments.entries()) {
+		table(`Segment ${index} rows`, segmentRows(segment));
+	}
+	takeaway(["Reads check the newest segment first, so alpha=new and the bravo tombstone already win logically."]);
 
-	print("06 Compaction", {
-		idea: "Newest values survive, overwritten values disappear, and tombstones can be dropped after covering all older segments.",
-		beforeCompaction,
-		afterCompaction: tree.snapshot(),
-		readAlpha: tree.getWithTrace("alpha"),
-		readBravo: tree.getWithTrace("bravo"),
-	});
+	operation("compact all segments");
+	await prediction(context, "After merging, should alpha=old and the bravo tombstone still be stored?");
+	tree.compactAll();
+	const afterCompaction = tree.snapshot();
+	table("Segments after compaction", segmentSummaryRows(afterCompaction));
+	for (const [index, segment] of (afterCompaction as { segments: object[] }).segments.entries()) {
+		table(`Compacted segment ${index} rows`, segmentRows(segment));
+	}
+	takeaway([
+		"alpha=old disappeared because alpha=new is newer.",
+		"bravo disappeared because the tombstone covered the older bravo value and can now be dropped.",
+	]);
+
+	operation('get("alpha") and get("bravo")');
+	await prediction(context, "What should reads return after compaction?");
+	const alphaRead = tree.getWithTrace("alpha");
+	const bravoRead = tree.getWithTrace("bravo");
+	table("alpha read trace", traceRows(alphaRead));
+	console.log(`\nalpha result: ${(alphaRead as { value: string | null }).value}`);
+	table("bravo read trace", traceRows(bravoRead));
+	console.log(`\nbravo status: ${(bravoRead as { status: string }).status}`);
+	takeaway(["Compaction changes the physical files, but preserves the logical answers returned by reads."]);
 }
 
 const lessonTitles: Record<string, string> = {
