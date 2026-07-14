@@ -218,7 +218,16 @@ function lesson06(): void {
 	});
 }
 
-const lessons: Record<string, () => void> = {
+const lessonTitles: Record<string, string> = {
+	"01": "Append-only log",
+	"02": "In-memory hash index",
+	"03": "SSTable with sparse index",
+	"04": "Memtable, WAL, and flush",
+	"05": "Tombstones and Bloom filters",
+	"06": "Compaction",
+};
+
+const lessons: Record<string, Lesson> = {
 	"01": lesson01,
 	"02": lesson02,
 	"03": lesson03,
@@ -229,10 +238,42 @@ const lessons: Record<string, () => void> = {
 
 const selectedLesson = process.argv[2];
 
-if (selectedLesson) {
-	lessons[selectedLesson]?.();
-} else {
-	for (const lesson of Object.values(lessons)) {
-		lesson();
+async function chooseLesson(context: LessonContext): Promise<string> {
+	heading("Log-Structured Storage Interactive Demos");
+	console.log("Choose one lesson, or run all lessons in order.\n");
+	for (const [id, title] of Object.entries(lessonTitles)) {
+		console.log(`${id}. ${title}`);
+	}
+	console.log("all. Run every lesson");
+
+	const answer = await context.rl.question("\nLesson [all]: ");
+	return answer.trim() || "all";
+}
+
+async function run(): Promise<void> {
+	const rl = createInterface({ input, output });
+	const context = { rl };
+
+	try {
+		const selected = selectedLesson ?? await chooseLesson(context);
+
+		if (selected === "all") {
+			for (const lesson of Object.values(lessons)) {
+				await lesson(context);
+			}
+			return;
+		}
+
+		const lesson = lessons[selected];
+		if (!lesson) {
+			console.log(`Unknown lesson "${selected}". Use 01-06 or all.`);
+			return;
+		}
+
+		await lesson(context);
+	} finally {
+		rl.close();
 	}
 }
+
+await run();
