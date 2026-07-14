@@ -65,12 +65,81 @@ function lesson03(): void {
 	});
 }
 
+function lesson04(): void {
+	const directory = path.join(dataRoot, "04-memtable-flush");
+	resetDirectory(directory);
+	const tree = new LSMTree(directory, 10, 2);
+
+	tree.put("delta", "4");
+	tree.put("alpha", "1");
+	tree.put("charlie", "3");
+	tree.put("bravo", "2");
+
+	const beforeFlush = tree.snapshot();
+	tree.flush();
+
+	print("04 Memtable flush", {
+		idea: "Writes arrive in any order in memory, then flush as a sorted immutable SSTable.",
+		beforeFlush,
+		afterFlush: tree.snapshot(),
+		readTrace: tree.getWithTrace("charlie"),
+	});
+}
+
+function lesson05(): void {
+	const directory = path.join(dataRoot, "05-tombstone-bloom");
+	resetDirectory(directory);
+	const tree = new LSMTree(directory, 3, 2);
+
+	tree.put("alpha", "1");
+	tree.put("bravo", "2");
+	tree.put("charlie", "3");
+	tree.delete("bravo");
+	tree.flush();
+
+	print("05 Tombstones and Bloom filters", {
+		idea: "Deletes hide older values, and Bloom filters let absent keys skip segments without scanning.",
+		readDeleted: tree.getWithTrace("bravo"),
+		readAbsent: tree.getWithTrace("omega"),
+		snapshot: tree.snapshot(),
+	});
+}
+
+function lesson06(): void {
+	const directory = path.join(dataRoot, "06-compaction");
+	resetDirectory(directory);
+	const tree = new LSMTree(directory, 10, 2);
+
+	tree.put("alpha", "old");
+	tree.put("bravo", "2");
+	tree.flush();
+	tree.put("alpha", "new");
+	tree.delete("bravo");
+	tree.put("charlie", "3");
+	tree.flush();
+
+	const beforeCompaction = tree.snapshot();
+	tree.compactAll();
+
+	print("06 Compaction", {
+		idea: "Newest values survive, overwritten values disappear, and tombstones can be dropped after covering all older segments.",
+		beforeCompaction,
+		afterCompaction: tree.snapshot(),
+		readAlpha: tree.getWithTrace("alpha"),
+		readBravo: tree.getWithTrace("bravo"),
+	});
+}
+
 const lessons: Record<string, () => void> = {
 	"01": lesson01,
 	"02": lesson02,
 	"03": lesson03,
+	"04": lesson04,
+	"05": lesson05,
+	"06": lesson06,
 };
 
+const selectedLesson = process.argv[2];
 
 if (selectedLesson) {
 	lessons[selectedLesson]?.();
