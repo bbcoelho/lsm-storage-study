@@ -181,3 +181,220 @@ export class HashIndexedLog {
 		};
 	}
 }
+
+export class BloomFilter {
+	private readonly bits: number[];
+
+	constructor(
+		private readonly bitSize: number,
+		private readonly hashCount: number,
+		bits?: number[],
+	) {
+		this.bits = bits ?? Array.from({ length: bitSize }, () => 0);
+	}
+
+	static fromKeys(keys: string[], bitsPerKey = 10): BloomFilter {
+		// Choose a small deterministic filter that is easy to inspect in demos.
+		const bitSize = Math.max(16, keys.length * bitsPerKey);
+		const hashCount = Math.max(3, Math.round((bitSize / Math.max(keys.length, 1)) * Math.log(2)));
+		const filter = new BloomFilter(bitSize, hashCount);
+
+		for (const key of keys) {
+			filter.add(key);
+		}
+
+		return filter;
+	}
+
+	static fromJSON(json: BloomFilterJSON): BloomFilter {
+		return new BloomFilter(json.bitSize, json.hashCount, json.bits);
+	}
+
+	add(key: string): void {
+		// Set every bit chosen by the hash family for this key.
+		for (const index of this.indexesFor(key)) {
+			this.bits[index] = 1;
+		}
+	}
+
+	mightContain(key: string): boolean {
+		// Any zero bit proves absence; all one bits means "maybe".
+		return this.indexesFor(key).every((index) => this.bits[index] === 1);
+	}
+
+	toJSON(): BloomFilterJSON {
+		return {
+			bitSize: this.bitSize,
+			hashCount: this.hashCount,
+			bits: [...this.bits],
+		};
+	}
+
+	private indexesFor(key: string): number[] {
+		const indexes: number[] = [];
+
+		// Derive multiple stable hashes by salting the same string hash.
+		for (let salt = 0; salt < this.hashCount; salt += 1) {
+			indexes.push(stableHash(`${salt}:${key}`) % this.bitSize);
+		}
+
+		return indexes;
+	}
+}
+
+function stableHash(input: string): number {
+	let hash = 2166136261;
+
+	// FNV-1a gives a compact deterministic hash without external dependencies.
+	for (let index = 0; index < input.length; index += 1) {
+		hash ^= input.charCodeAt(index);
+		hash = Math.imul(hash, 16777619);
+	}
+
+	return hash >>> 0;
+}
+
+export class SSTableSegment {
+	private readonly bloom: BloomFilter;
+
+	private constructor(
+		private readonly dataFile: string,
+		private readonly metaFile: string,
+		private readonly meta: SegmentMeta,
+	) {
+		this.bloom = BloomFilter.fromJSON(meta.bloom);
+	}
+
+	static create(directory: string, id: string, entries: Iterable<LogEntry>, blockSize = 3): SSTableSegment {
+		fs.mkdirSync(directory, { recursive: true });
+
+		const dataFile = path.join(directory, `${id}.sst`);
+		const metaFile = path.join(directory, `${id}.meta.json`);
+		const rows = uniqueLatestByKey(entries);
+		const sparseIndex: SparseIndexEntry[] = [];
+		let offset = 0;
+		let file = "";
+
+		// Write sorted records once and capture the first key in each block.
+		for (let index = 0; index < rows.length; index += 1) {
+			const entry = rows[index];
+			if (!entry) {
+				continue;
+			}
+
+			if (index % blockSize === 0) {
+				sparseIndex.push({ firstKey: entry.key, offset });
+			}
+
+			const encoded = encodeEntry(entry);
+			file += encoded;
+			offset += Buffer.byteLength(encoded);
+		}
+
+		const bloom = BloomFilter.fromKeys(rows.map((entry) => entry.key));
+		const meta: SegmentMeta = {
+			id,
+			createdAtSeq: rows.reduce((max, entry) => Math.max(max, entry.seq), 0),
+			blockSize,
+			sparseIndex,
+			bloom: bloom.toJSON(),
+		};
+
+		fs.writeFileSync(dataFile, file);
+		fs.writeFileSync(metaFile, JSON.stringify(meta, null, "\t"));
+
+		return new SSTableSegment(dataFile, metaFile, meta);
+	}
+
+	static open(dataFile: string): SSTableSegment {
+		// Rehydrate an immutable segment from its sidecar metadata.
+		const metaFile = dataFile.replace(/\.sst$/, ".meta.json");
+		const meta = JSON.parse(fs.readFileSync(metaFile, "utf8")) as SegmentMeta;
+		return new SSTableSegment(dataFile, metaFile, meta);
+	}
+
+	get id(): string {
+		return this.meta.id;
+	}
+
+	get createdAtSeq(): number {
+		return this.meta.createdAtSeq;
+	}
+
+	lookup(key: string): SegmentLookup {
+		if (!this.bloom.mightContain(key)) {
+			return { found: false, skippedByBloom: true, scannedKeys: [] };
+		}
+
+		const start = this.findSparseStart(key);
+		if (!start) {
+			return { found: false, skippedByBloom: false, scannedKeys: [] };
+		}
+
+		const scannedKeys: string[] = [];
+		const data = fs.readFileSync(this.dataFile, "utf8").slice(start.offset);
+
+		// Scan forward from the nearest sparse-index block until sort order passes the key.
+		for (const line of data.split("\n")) {
+			if (line.length === 0) {
+				continue;
+			}
+
+			const entry = decodeEntry(line);
+			scannedKeys.push(entry.key);
+
+			if (entry.key === key) {
+				return { found: true, skippedByBloom: false, entry, startKey: start.firstKey, scannedKeys };
+			}
+
+			if (entry.key.localeCompare(key) > 0) {
+				break;
+			}
+		}
+
+		return { found: false, skippedByBloom: false, startKey: start.firstKey, scannedKeys };
+	}
+
+	entries(): LogEntry[] {
+		// Decode the immutable table for tests, demos, and compaction.
+		return fs.readFileSync(this.dataFile, "utf8")
+			.split("\n")
+			.filter(Boolean)
+			.map(decodeEntry);
+	}
+
+	range(startKey: string, endKey: string): LogEntry[] {
+		// Sorted storage makes range scans a linear walk over neighboring keys.
+		return this.entries().filter((entry) => entry.key >= startKey && entry.key <= endKey);
+	}
+
+	deleteFiles(): void {
+		// Remove obsolete immutable files only after replacement segments exist.
+		fs.rmSync(this.dataFile, { force: true });
+		fs.rmSync(this.metaFile, { force: true });
+	}
+
+	snapshot(): object {
+		return {
+			id: this.meta.id,
+			entries: this.entries(),
+			sparseIndex: this.meta.sparseIndex,
+			bloomBits: this.meta.bloom.bits.join(""),
+		};
+	}
+
+	private findSparseStart(key: string): SparseIndexEntry | undefined {
+		let candidate: SparseIndexEntry | undefined;
+
+		// Pick the last block whose first key is less than or equal to the target.
+		for (const entry of this.meta.sparseIndex) {
+			if (entry.firstKey.localeCompare(key) <= 0) {
+				candidate = entry;
+			} else {
+				break;
+			}
+		}
+
+		return candidate;
+	}
+}
