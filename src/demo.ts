@@ -346,23 +346,52 @@ async function lesson04(context: LessonContext): Promise<void> {
 	takeaway(["Reads check memory first, then newest segment to oldest segment."]);
 }
 
-function lesson05(): void {
+async function lesson05(context: LessonContext): Promise<void> {
 	const directory = path.join(dataRoot, "05-tombstone-bloom");
 	resetDirectory(directory);
 	const tree = new LSMTree(directory, 3, 2);
 
+	heading("Lesson 05: Tombstones and Bloom filters");
+	concept([
+		"A delete is represented by a special record called a tombstone.",
+		"Reads must stop at the newest record for a key, even if that record is a tombstone.",
+		"A Bloom filter can prove a key is absent from a segment without scanning it.",
+	]);
+
+	operation('put("alpha", "1"), put("bravo", "2"), put("charlie", "3")');
+	await prediction(context, "The memtable limit is 3. What should happen after the third put?");
 	tree.put("alpha", "1");
 	tree.put("bravo", "2");
 	tree.put("charlie", "3");
+	let snapshot = tree.snapshot();
+	table("Segments after automatic flush", segmentSummaryRows(snapshot));
+	takeaway(["The first three writes crossed the memtable threshold and became one SSTable segment."]);
+
+	operation('delete("bravo") and flush()');
+	await prediction(context, "Will the delete remove the old bravo row immediately, or write a newer marker?");
 	tree.delete("bravo");
 	tree.flush();
+	snapshot = tree.snapshot();
+	table("Segments after tombstone flush", segmentSummaryRows(snapshot));
+	const treeSnapshot = snapshot as { segments: object[] };
+	const [newestSegment] = treeSnapshot.segments;
+	if (newestSegment) {
+		table("Newest segment rows", segmentRows(newestSegment));
+	}
+	takeaway(["The newest segment contains a tombstone for bravo, which hides older bravo values."]);
 
-	print("05 Tombstones and Bloom filters", {
-		idea: "Deletes hide older values, and Bloom filters let absent keys skip segments without scanning.",
-		readDeleted: tree.getWithTrace("bravo"),
-		readAbsent: tree.getWithTrace("omega"),
-		snapshot: tree.snapshot(),
-	});
+	operation('get("bravo")');
+	await prediction(context, "The older segment still has bravo=2. What should the newest tombstone do?");
+	const deletedRead = tree.getWithTrace("bravo");
+	table("Deleted-key read trace", traceRows(deletedRead));
+	console.log(`\nRead status: ${(deletedRead as { status: string }).status}`);
+	takeaway(["The tombstone is the newest record for bravo, so the key is treated as deleted."]);
+
+	operation('get("omega")');
+	await prediction(context, "omega was never written. How can the engine avoid scanning segment rows?");
+	const absentRead = tree.getWithTrace("omega");
+	table("Absent-key read trace", traceRows(absentRead));
+	takeaway(["Each segment Bloom filter says omega is definitely absent, so no row scan is needed."]);
 }
 
 function lesson06(): void {
