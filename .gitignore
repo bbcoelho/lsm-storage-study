@@ -1,0 +1,4 @@
+node_modules/
+.study-data/
+dist/
+coverage/

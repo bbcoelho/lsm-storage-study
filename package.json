@@ -1,0 +1,22 @@
+{
+	"name": "lsm-storage-study",
+	"version": "1.0.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"check": "tsc --noEmit",
+		"test": "node --import tsx --test test/**/*.test.ts",
+		"demo": "tsx src/demo.ts",
+		"demo:01": "tsx src/demo.ts 01",
+		"demo:02": "tsx src/demo.ts 02",
+		"demo:03": "tsx src/demo.ts 03",
+		"demo:04": "tsx src/demo.ts 04",
+		"demo:05": "tsx src/demo.ts 05",
+		"demo:06": "tsx src/demo.ts 06"
+	},
+	"devDependencies": {
+		"@types/node": "^24.0.14",
+		"tsx": "^4.20.3",
+		"typescript": "^5.8.3"
+	}
+}
