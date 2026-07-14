@@ -150,24 +150,66 @@ async function lesson01(context: LessonContext): Promise<void> {
 	]);
 }
 
-function lesson02(): void {
+async function lesson02(context: LessonContext): Promise<void> {
 	const directory = path.join(dataRoot, "02-hash-index");
 	resetDirectory(directory);
 	const file = path.join(directory, "data.log");
 	const store = new HashIndexedLog(file);
 
+	heading("Lesson 02: In-memory hash index");
+	concept([
+		"The append-only log is durable, but scanning it for every read is slow.",
+		"A hash index maps each key to the newest byte offset for that key.",
+		"The index is memory-only, so restart requires rebuilding it from the log.",
+	]);
+
+	operation('set("color", "blue")');
+	await prediction(context, "After the append, what should the hash index store for color?");
 	store.set("color", "blue");
+	let snapshot = store.snapshot() as { log: Array<{ offset: number; entry: { key: string; value: string | null; kind: string; seq: number } }>; index: Record<string, number> };
+	table("Log rows", snapshot.log.map(({ offset, entry }) => ({
+		offset,
+		key: entry.key,
+		value: formatValue(entry.value),
+		kind: entry.kind,
+		seq: entry.seq,
+	})));
+	table("Hash index", Object.entries(snapshot.index).map(([key, offset]) => ({ key, offset })));
+	takeaway(["The index points color directly to its physical log offset."]);
+
+	operation('set("shape", "circle")');
+	await prediction(context, "Will shape need to scan color first, or can it get its own index entry?");
 	store.set("shape", "circle");
+	snapshot = store.snapshot() as typeof snapshot;
+	table("Hash index", Object.entries(snapshot.index).map(([key, offset]) => ({ key, offset })));
+	takeaway(["Each key has one index entry, even though the log may keep growing."]);
+
+	operation('set("color", "green")');
+	await prediction(context, "Color already has an index entry. Should it point to the old row or the newest row?");
 	store.set("color", "green");
+	snapshot = store.snapshot() as typeof snapshot;
+	table("Log rows", snapshot.log.map(({ offset, entry }) => ({
+		offset,
+		key: entry.key,
+		value: formatValue(entry.value),
+		kind: entry.kind,
+		seq: entry.seq,
+	})));
+	table("Hash index", Object.entries(snapshot.index).map(([key, offset]) => ({ key, offset })));
+	takeaway(["The index for color moved to the newest offset, while the old color row stayed in the log."]);
 
+	operation('get("color")');
+	await prediction(context, "What value should the read return if it jumps to the indexed offset?");
+	console.log(`\nRead result: ${store.get("color")}`);
+	takeaway(["The read uses one hash lookup plus one offset read, rather than scanning every log row."]);
+
+	operation("simulate restart");
+	await prediction(context, "The log file remains on disk. What happens to the in-memory hash map?");
+	const emptyMemoryStore = new HashIndexedLog(file);
 	const rebuilt = new HashIndexedLog(file, true);
-
-	print("02 In-memory hash index", {
-		idea: "The index points each key to its newest byte offset, but it must be rebuilt after restart.",
-		valueBeforeRestart: store.get("color"),
-		valueAfterRebuild: rebuilt.get("color"),
-		snapshot: rebuilt.snapshot(),
-	});
+	console.log(`\nRead without rebuilding index: ${emptyMemoryStore.get("color") ?? "<missing>"}`);
+	console.log(`Read after rebuilding index: ${rebuilt.get("color")}`);
+	takeaway(["The durable log can rebuild the volatile hash index, but large logs make restart slower."]);
 }
 
 function lesson03(): void {
