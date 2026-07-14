@@ -1,9 +1,97 @@
 import path from "node:path";
+import { stdin as input, stdout as output } from "node:process";
+import { createInterface, type Interface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { AppendOnlyLog, HashIndexedLog, LSMTree, SSTableSegment, resetDirectory } from "./lsm.js";
 
 const projectRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const dataRoot = path.join(projectRoot, ".study-data");
+
+type LessonContext = {
+	rl: Interface;
+};
+
+type Lesson = (context: LessonContext) => Promise<void> | void;
+
+type TableRow = Record<string, boolean | number | string | null | undefined>;
+
+function heading(title: string): void {
+	console.log(`\n${"=".repeat(72)}`);
+	console.log(title);
+	console.log("=".repeat(72));
+}
+
+function concept(lines: string[]): void {
+	console.log("\nConcept:");
+	for (const line of lines) {
+		console.log(`- ${line}`);
+	}
+}
+
+function operation(text: string): void {
+	console.log("\nOperation:");
+	console.log(`  ${text}`);
+}
+
+async function prediction(context: LessonContext, question: string): Promise<void> {
+	console.log("\nPrediction:");
+	console.log(question);
+	await pause(context);
+}
+
+async function pause(context: LessonContext, prompt = "Press Enter to continue..."): Promise<void> {
+	await context.rl.question(`\n${prompt}`);
+}
+
+function takeaway(lines: string[]): void {
+	console.log("\nTakeaway:");
+	for (const line of lines) {
+		console.log(`- ${line}`);
+	}
+}
+
+function table(title: string, rows: TableRow[]): void {
+	console.log(`\n${title}:`);
+	if (rows.length === 0) {
+		console.log("  empty");
+		return;
+	}
+
+	console.table(rows);
+}
+
+function formatValue(value: string | null): string {
+	return value ?? "<tombstone>";
+}
+
+function segmentRows(snapshot: object): TableRow[] {
+	const segment = snapshot as { entries: Array<{ key: string; value: string | null; kind: string; seq: number }> };
+	return segment.entries.map((entry) => ({
+		key: entry.key,
+		value: formatValue(entry.value),
+		kind: entry.kind,
+		seq: entry.seq,
+	}));
+}
+
+function sparseIndexRows(snapshot: object): TableRow[] {
+	const segment = snapshot as { sparseIndex: Array<{ firstKey: string; offset: number }> };
+	return segment.sparseIndex.map((entry) => ({
+		firstKey: entry.firstKey,
+		offset: entry.offset,
+	}));
+}
+
+function traceRows(trace: object): TableRow[] {
+	const read = trace as { trace: Array<{ place: string; found: boolean; skippedByBloom: boolean; startKey?: string; scannedKeys: string[] }> };
+	return read.trace.map((step) => ({
+		place: step.place,
+		found: step.found,
+		skippedByBloom: step.skippedByBloom,
+		startKey: step.startKey ?? "-",
+		scannedKeys: step.scannedKeys.join(", ") || "-",
+	}));
+}
 
 function print(title: string, value: unknown): void {
 	console.log(`\n## ${title}`);
