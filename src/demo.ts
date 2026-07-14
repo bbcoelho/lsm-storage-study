@@ -124,11 +124,6 @@ function segmentSummaryRows(snapshot: object): TableRow[] {
 	}));
 }
 
-function print(title: string, value: unknown): void {
-	console.log(`\n## ${title}`);
-	console.log(JSON.stringify(value, null, "\t"));
-}
-
 async function lesson01(context: LessonContext): Promise<void> {
 	const directory = path.join(dataRoot, "01-append-log");
 	resetDirectory(directory);
