@@ -138,7 +138,7 @@ async function lesson01(context: LessonContext): Promise<void> {
 	concept([
 		"A write does not update an existing row in place.",
 		"Every write appends a new record at the end of the file.",
-		"The byte offset becomes the physical address of that record.",
+		"The byte offset is the record's position in bytes from the start of the file.",
 	]);
 
 	operation('append({ key: "color", value: "blue" })');
@@ -151,7 +151,10 @@ async function lesson01(context: LessonContext): Promise<void> {
 		kind: entry.kind,
 		seq: entry.seq,
 	})));
-	takeaway([`The first record starts at byte offset ${firstOffset}.`]);
+	takeaway([
+		`The first record starts at byte offset ${firstOffset}.`,
+		"Offsets are byte positions, not row numbers.",
+	]);
 
 	operation('append({ key: "shape", value: "circle" })');
 	await prediction(context, "Will this overwrite color, or be placed after the first row?");
@@ -163,7 +166,10 @@ async function lesson01(context: LessonContext): Promise<void> {
 		kind: entry.kind,
 		seq: entry.seq,
 	})));
-	takeaway([`The second record starts at byte offset ${secondOffset}; the first row remains unchanged.`]);
+	takeaway([
+		`The second record starts at byte offset ${secondOffset}; the first row remains unchanged.`,
+		`That means the first JSON record plus its newline occupied ${secondOffset - firstOffset} bytes.`,
+	]);
 
 	operation('append({ key: "color", value: "green" })');
 	await prediction(context, "This key already exists. What happens to the old color=blue row?");
