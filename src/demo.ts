@@ -139,6 +139,7 @@ async function lesson01(context: LessonContext): Promise<void> {
 		"A write does not update an existing row in place.",
 		"Every write appends a new record at the end of the file.",
 		"The byte offset is the record's position in bytes from the start of the file.",
+		'kind tells you the record type: "put" stores a value, and later "delete" will mean a tombstone.',
 	]);
 
 	operation('append({ key: "color", value: "blue" })');
@@ -154,6 +155,7 @@ async function lesson01(context: LessonContext): Promise<void> {
 	takeaway([
 		`The first record starts at byte offset ${firstOffset}.`,
 		"Offsets are byte positions, not row numbers.",
+		'kind is "put" here because this record stores color=blue.',
 	]);
 
 	operation('append({ key: "shape", value: "circle" })');
