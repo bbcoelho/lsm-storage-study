@@ -199,7 +199,8 @@ async function lesson02(context: LessonContext): Promise<void> {
 	concept([
 		"The append-only log is durable, but scanning it for every read is slow.",
 		"A hash index maps each key to the newest byte offset for that key.",
-		"The index is memory-only, so restart requires rebuilding it from the log.",
+		"The log is on disk; the hash index lives in process memory.",
+		"After restart, memory starts empty, so the index must be rebuilt by scanning the log.",
 	]);
 
 	operation('set("color", "blue")');
@@ -243,12 +244,33 @@ async function lesson02(context: LessonContext): Promise<void> {
 	takeaway(["The read uses one hash lookup plus one offset read, rather than scanning every log row."]);
 
 	operation("simulate restart");
-	await prediction(context, "The log file remains on disk. What happens to the in-memory hash map?");
+	await prediction(context, "The log file remains on disk, but the process memory is gone. What should the new hash map contain before rebuilding?");
 	const emptyMemoryStore = new HashIndexedLog(file);
+	const emptyMemorySnapshot = emptyMemoryStore.snapshot() as typeof snapshot;
+	table("Durable log after restart", emptyMemorySnapshot.log.map(({ offset, entry }) => ({
+		offset,
+		key: entry.key,
+		value: formatValue(entry.value),
+		kind: entry.kind,
+		seq: entry.seq,
+	})));
+	table("Fresh in-memory index before rebuild", Object.entries(emptyMemorySnapshot.index).map(([key, offset]) => ({ key, offset })));
+	takeaway([
+		"Restart did not erase the log file because it was written to disk.",
+		"Restart did erase the hash index because this project keeps it only in memory.",
+	]);
+
+	operation("rebuild index by scanning the log from start to end");
+	await prediction(context, "When the same key appears multiple times, which offset should rebuilding keep?");
 	const rebuilt = new HashIndexedLog(file, true);
+	const rebuiltSnapshot = rebuilt.snapshot() as typeof snapshot;
+	table("Rebuilt hash index", Object.entries(rebuiltSnapshot.index).map(([key, offset]) => ({ key, offset })));
 	console.log(`\nRead without rebuilding index: ${emptyMemoryStore.get("color") ?? "<missing>"}`);
 	console.log(`Read after rebuilding index: ${rebuilt.get("color")}`);
-	takeaway(["The durable log can rebuild the volatile hash index, but large logs make restart slower."]);
+	takeaway([
+		"Rebuilding replays every log row and keeps the newest offset for each key.",
+		"That restores fast reads, but large logs make restart slower.",
+	]);
 }
 
 async function lesson03(context: LessonContext): Promise<void> {
