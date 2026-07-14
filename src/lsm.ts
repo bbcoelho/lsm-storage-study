@@ -398,3 +398,158 @@ export class SSTableSegment {
 		return candidate;
 	}
 }
+
+export class LSMTree {
+	private readonly wal: AppendOnlyLog;
+	private readonly segmentDirectory: string;
+	private readonly memtable = new Map<string, LogEntry>();
+	private readonly segments: SSTableSegment[] = [];
+	private nextSeq = 1;
+
+	constructor(
+		private readonly directory: string,
+		private readonly memtableLimit = 4,
+		private readonly blockSize = 3,
+	) {
+		this.segmentDirectory = path.join(directory, "segments");
+		fs.mkdirSync(this.segmentDirectory, { recursive: true });
+		this.wal = new AppendOnlyLog(path.join(directory, "wal.log"));
+
+		// Load existing immutable segments so flushed data survives a restart.
+		const existingSegments = fs.readdirSync(this.segmentDirectory)
+			.filter((fileName) => fileName.endsWith(".sst"))
+			.map((fileName) => SSTableSegment.open(path.join(this.segmentDirectory, fileName)))
+			.sort((a, b) => b.createdAtSeq - a.createdAtSeq);
+		this.segments.push(...existingSegments);
+
+		for (const segment of existingSegments) {
+			this.nextSeq = Math.max(this.nextSeq, segment.createdAtSeq + 1);
+		}
+	}
+
+	put(key: string, value: string): void {
+		this.write({ key, value, kind: "put", seq: this.nextSeq++ });
+	}
+
+	delete(key: string): void {
+		this.write({ key, value: null, kind: "delete", seq: this.nextSeq++ });
+	}
+
+	get(key: string): string | undefined {
+		// Reads check newest mutable data before older immutable segments.
+		const memoryEntry = this.memtable.get(key);
+		if (memoryEntry) {
+			return memoryEntry.kind === "delete" ? undefined : memoryEntry.value ?? undefined;
+		}
+
+		for (const segment of this.segments) {
+			const result = segment.lookup(key);
+			if (result.found && result.entry) {
+				return result.entry.kind === "delete" ? undefined : result.entry.value ?? undefined;
+			}
+		}
+
+		return undefined;
+	}
+
+	getWithTrace(key: string): object {
+		const trace: object[] = [];
+		const memoryEntry = this.memtable.get(key);
+
+		// Expose the read path so demos can show where work is avoided.
+		if (memoryEntry) {
+			return {
+				status: memoryEntry.kind === "delete" ? "deleted" : "found",
+				value: memoryEntry.kind === "delete" ? null : memoryEntry.value,
+				trace: [{ place: "memtable", entry: memoryEntry }],
+			};
+		}
+
+		for (const segment of this.segments) {
+			const result = segment.lookup(key);
+			trace.push({ place: segment.id, ...result });
+
+			if (result.found && result.entry) {
+				return {
+					status: result.entry.kind === "delete" ? "deleted" : "found",
+					value: result.entry.kind === "delete" ? null : result.entry.value,
+					trace,
+				};
+			}
+		}
+
+		return { status: "missing", value: null, trace };
+	}
+
+	flush(): SSTableSegment | undefined {
+		if (this.memtable.size === 0) {
+			return undefined;
+		}
+
+		// Freeze the sorted memtable into a new immutable segment.
+		const id = `segment-${String(this.nextSeq).padStart(4, "0")}`;
+		const segment = SSTableSegment.create(this.segmentDirectory, id, this.memtable.values(), this.blockSize);
+		this.segments.unshift(segment);
+		this.memtable.clear();
+		this.wal.truncate();
+		return segment;
+	}
+
+	recoverMemtableFromWal(): void {
+		this.memtable.clear();
+
+		// Replay only unflushed writes to reconstruct the mutable memtable.
+		for (const { entry } of this.wal.scan()) {
+			this.memtable.set(entry.key, entry);
+			this.nextSeq = Math.max(this.nextSeq, entry.seq + 1);
+		}
+	}
+
+	compactAll(): SSTableSegment | undefined {
+		if (this.segments.length <= 1) {
+			return this.segments[0];
+		}
+
+		const latest = new Map<string, LogEntry>();
+
+		// Merge newest to oldest so overwritten values are discarded.
+		for (const segment of this.segments) {
+			for (const entry of segment.entries()) {
+				if (!latest.has(entry.key)) {
+					latest.set(entry.key, entry);
+				}
+			}
+		}
+
+		const survivors = [...latest.values()].filter((entry) => entry.kind !== "delete");
+		const id = `compacted-${String(this.nextSeq).padStart(4, "0")}`;
+		const compacted = SSTableSegment.create(this.segmentDirectory, id, survivors, this.blockSize);
+
+		// Atomically switch the logical read set, then clean up obsolete inputs.
+		const oldSegments = [...this.segments];
+		this.segments.splice(0, this.segments.length, compacted);
+		for (const segment of oldSegments) {
+			segment.deleteFiles();
+		}
+
+		return compacted;
+	}
+
+	snapshot(): object {
+		return {
+			memtable: sortedEntries(this.memtable.values()),
+			segments: this.segments.map((segment) => segment.snapshot()),
+			wal: this.wal.scan(),
+		};
+	}
+
+	private write(entry: LogEntry): void {
+		// Persist to the WAL before exposing the write in memory.
+		this.wal.append(entry);
+		this.memtable.set(entry.key, entry);
+
+		if (this.memtable.size >= this.memtableLimit) {
+			this.flush();
+		}
+	}
+}
