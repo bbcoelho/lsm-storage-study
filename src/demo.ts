@@ -98,20 +98,56 @@ function print(title: string, value: unknown): void {
 	console.log(JSON.stringify(value, null, "\t"));
 }
 
-function lesson01(): void {
+async function lesson01(context: LessonContext): Promise<void> {
 	const directory = path.join(dataRoot, "01-append-log");
 	resetDirectory(directory);
 	const log = new AppendOnlyLog(path.join(directory, "data.log"));
 
-	const firstOffset = log.append({ key: "color", value: "blue", kind: "put", seq: 1 });
-	const secondOffset = log.append({ key: "shape", value: "circle", kind: "put", seq: 2 });
-	const thirdOffset = log.append({ key: "color", value: "green", kind: "put", seq: 3 });
+	heading("Lesson 01: Append-only log");
+	concept([
+		"A write does not update an existing row in place.",
+		"Every write appends a new record at the end of the file.",
+		"The byte offset becomes the physical address of that record.",
+	]);
 
-	print("01 Append-only log", {
-		idea: "Updates are new rows. Old rows stay on disk until compaction exists.",
-		offsets: { firstOffset, secondOffset, thirdOffset },
-		physicalLog: log.scan(),
-	});
+	operation('append({ key: "color", value: "blue" })');
+	await prediction(context, "The file is empty. What byte offset should the first record get?");
+	const firstOffset = log.append({ key: "color", value: "blue", kind: "put", seq: 1 });
+	table("Physical log after first append", log.scan().map(({ offset, entry }) => ({
+		offset,
+		key: entry.key,
+		value: formatValue(entry.value),
+		kind: entry.kind,
+		seq: entry.seq,
+	})));
+	takeaway([`The first record starts at byte offset ${firstOffset}.`]);
+
+	operation('append({ key: "shape", value: "circle" })');
+	await prediction(context, "Will this overwrite color, or be placed after the first row?");
+	const secondOffset = log.append({ key: "shape", value: "circle", kind: "put", seq: 2 });
+	table("Physical log after second append", log.scan().map(({ offset, entry }) => ({
+		offset,
+		key: entry.key,
+		value: formatValue(entry.value),
+		kind: entry.kind,
+		seq: entry.seq,
+	})));
+	takeaway([`The second record starts at byte offset ${secondOffset}; the first row remains unchanged.`]);
+
+	operation('append({ key: "color", value: "green" })');
+	await prediction(context, "This key already exists. What happens to the old color=blue row?");
+	const thirdOffset = log.append({ key: "color", value: "green", kind: "put", seq: 3 });
+	table("Physical log after overwrite append", log.scan().map(({ offset, entry }) => ({
+		offset,
+		key: entry.key,
+		value: formatValue(entry.value),
+		kind: entry.kind,
+		seq: entry.seq,
+	})));
+	takeaway([
+		`The new color value starts at byte offset ${thirdOffset}.`,
+		"The old color=blue row still occupies disk space until a later compaction step removes stale data.",
+	]);
 }
 
 function lesson02(): void {
